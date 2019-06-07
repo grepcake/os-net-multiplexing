@@ -1,59 +1,53 @@
 #include "common.h"
 
-#include <assert.h>  // assert
-#include <errno.h>   // errno
-#include <netdb.h>   // getaddrinfo, getnameinfo
-#include <poll.h>    // pollfd
-#include <stdbool.h> // bool
-#include <stddef.h>  // NULL, size_t
-#include <stdlib.h>  // calloc
-#include <string.h>  // strerror
-#include <unistd.h>  // close
+#include <assert.h>     // assert
+#include <errno.h>      // errno
+#include <poll.h>       // pollfd
+#include <stdbool.h>    // bool
+#include <stddef.h>     // NULL, size_t
+#include <stdlib.h>     // calloc
+#include <string.h>     // strerror
+#include <sys/socket.h> // socket
+#include <sys/stat.h>   // mkdir
+#include <sys/un.h>     // struct sockaddr_un
+#include <unistd.h>     // close
 
 #include "utils.h"
 
+int
+cmn_init() {
+    int rc = mkdir(SOCKET_DIR, 0700);
+    if (rc == -1) {
+        if (errno != EEXIST) {
+            err_log("couldn't create directory %s: %s", SOCKET_DIR, strerror(errno));
+            return -1;
+        }
+    }
+    return 0;
+}
+
 struct cmn_peer {
     int sfd;
-    struct sockaddr_storage peer_addr;
+    struct sockaddr_un peer_addr;
     socklen_t peer_addr_len;
 };
 
 struct cmn_peer *
-cmn_peer_create(char const *node, char const *port) {
-    struct addrinfo hints = {.ai_family   = AF_UNSPEC,
-                             .ai_socktype = SOCK_STREAM,
-                             .ai_protocol = IPPROTO_TCP,
-                             .ai_flags    = AI_NUMERICSERV};
-    struct addrinfo *result;
-    int gai_ec = getaddrinfo(node, port, &hints, &result);
-    if (gai_ec != 0) {
-        err_log("getaddrinfo failed: %s", gai_strerror(gai_ec));
-        return NULL;
-    }
-
+cmn_peer_create() {
     struct cmn_peer *peer = calloc(1, sizeof(struct cmn_peer));
     if (peer == NULL) {
         err_log("calloc failed: %s", strerror(errno));
         free(peer);
         return NULL;
     }
-    bool socket_ok = false;
-    for (struct addrinfo *rp = result; rp != NULL; rp = rp->ai_next) {
-        peer->sfd = socket(rp->ai_family, rp->ai_socktype | SOCK_NONBLOCK, rp->ai_protocol);
-        if (peer->sfd != -1) {
-            socket_ok = true;
-            memcpy(&peer->peer_addr, rp->ai_addr, rp->ai_addrlen);
-            peer->peer_addr_len = rp->ai_addrlen;
-            break;
-        }
-    }
-    freeaddrinfo(result);
-    if (!socket_ok) {
+    peer->sfd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    if (peer->sfd == -1) {
         err_log("could not create socket");
         free(peer);
         return NULL;
     }
-
+    peer->peer_addr     = (struct sockaddr_un){.sun_family = AF_UNIX, .sun_path = SOCKET_NAME};
+    peer->peer_addr_len = sizeof(struct sockaddr_un);
     return peer;
 }
 
@@ -68,6 +62,10 @@ cmn_peer_destroy(struct cmn_peer *peer) {
 
 int
 cmn_listen(struct cmn_peer *server) {
+    if (cmn_init() == -1) {
+        return -1;
+    }
+    unlink(SOCKET_NAME);
     int rc;
     rc = bind(server->sfd, (struct sockaddr const *)&server->peer_addr, server->peer_addr_len);
     if (rc == -1) {
@@ -165,6 +163,9 @@ cmn_listen(struct cmn_peer *server) {
 
 int
 cmp_exchange(struct cmn_peer *client, char const *message, char buf[static PACKET_SIZE + 1], size_t *buf_len) {
+    if (cmn_init() == -1) {
+        return -1;
+    }
     int rc;
     rc                   = connect(client->sfd, (struct sockaddr const *)&client->peer_addr, client->peer_addr_len);
     struct pollfd pfds[] = {{.fd = client->sfd, .events = POLLOUT}};
@@ -201,15 +202,17 @@ cmp_exchange(struct cmn_peer *client, char const *message, char buf[static PACKE
                 if (error == 0) {
                     printf("connected!\n");
                     sleep(3);
-                    rc = write(client->sfd, message, strlen(message) + 1);
-                    if (rc == -1) {
-                        printf("write failed: %s\n", strerror(errno));
-                    }
                     break;
                 }
             }
         }
     }
+
+    rc = write(client->sfd, message, strlen(message) + 1);
+    if (rc == -1) {
+        printf("write failed: %s\n", strerror(errno));
+    }
+
     pfds[0].events = POLLIN;
     rc             = poll(pfds, 1, -1);
     if (rc == -1) {
@@ -220,8 +223,7 @@ cmp_exchange(struct cmn_peer *client, char const *message, char buf[static PACKE
     *buf_len = 0;
     while (true) {
         if (pfds[0].revents & POLLHUP) {
-            printf("server closed its end of channel\n");
-            return -1;
+            printf("server closed its end of channel??\n");
         }
         if (pfds[0].revents & POLLNVAL) {
             printf("invalid request, fd not open\n");

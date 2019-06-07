@@ -1,12 +1,14 @@
 #include <stddef.h> // size_t
 
+#define SOCKET_DIR "/tmp/os-net/"
+#define SOCKET_NAME SOCKET_DIR "socket-0"
 #define DEFAULT_PORT "25001"
 #define PACKET_SIZE 506
 
 struct cmn_peer;
 
 struct cmn_peer *
-cmn_peer_create(char const *node, char const *port);
+cmn_peer_create();
 
 void
 cmn_peer_destroy(struct cmn_peer *peer);
