@@ -17,4 +17,4 @@ int
 cmn_listen(struct cmn_peer *server);
 
 int
-cmp_exchange(struct cmn_peer *client, char const *message, char buf[static PACKET_SIZE], size_t *buf_len);
+cmp_exchange(struct cmn_peer *client, char const *message);
